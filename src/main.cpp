@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "MotionPlanner.h"
 
 /*
  * Nicht blockierender Serial-Interpreter für das Teleskop-Protokoll.
@@ -23,6 +24,7 @@
 
 namespace {
 constexpr size_t LINE_CAPACITY = 96; // einschließlich abschließendem '\0'
+MotionPlanner motionPlanner;
 char lineBuffer[LINE_CAPACITY];
 size_t lineLength = 0;
 bool lineOverflow = false;
@@ -96,7 +98,8 @@ void processLine(char *line) {
             printBadCommand(); return;
         }
         Serial.print("TEST Goto "); Serial.print(azimuth); Serial.print(' ');
-        Serial.println(altitude); // TODO: gotoPosition(azimuth, altitude)
+        Serial.println(altitude);
+        motionPlanner.gotoPosition(azimuth, altitude);
         Serial.println("+OK");
         return;
     }
@@ -111,7 +114,8 @@ void processLine(char *line) {
             printBadCommand(); return;
         }
         Serial.print("TEST Follow "); Serial.print(rate); Serial.print(' ');
-        Serial.println(enabled ? "true" : "false"); // TODO: setFollow(rate, enabled)
+        Serial.println(enabled ? "true" : "false");
+        motionPlanner.setFollow(rate, enabled);
         Serial.println("+OK");
         return;
     }
@@ -119,7 +123,8 @@ void processLine(char *line) {
     // Home hat eine asynchrone Abschlussmeldung +HOMED.
     if (equalsIgnoreCase(command, "Home")) {
         if (!hasExactArguments(cursor, 0)) { printBadCommand(); return; }
-        Serial.println("TEST Home"); // TODO: startHome()
+        Serial.println("TEST Home");
+        motionPlanner.startHome();
         Serial.println("+OK");
         return;
     }
@@ -134,7 +139,8 @@ void processLine(char *line) {
             printBadCommand(); return;
         }
         Serial.print("TEST Null "); Serial.print(azimuth); Serial.print(' ');
-        Serial.println(altitude); // TODO: setNull(azimuth, altitude)
+        Serial.println(altitude);
+        motionPlanner.setNull(azimuth, altitude);
         Serial.println("+OK");
         return;
     }
@@ -152,7 +158,11 @@ void processLine(char *line) {
             printBadCommand(); return;
         }
         Serial.print("TEST "); Serial.print(manualName); Serial.print(' ');
-        Serial.println(speed); // TODO: jeweilige manuelle Bewegung starten
+        Serial.println(speed);
+        if (equalsIgnoreCase(manualName, "Auf")) motionPlanner.moveUp(speed);
+        else if (equalsIgnoreCase(manualName, "Ab")) motionPlanner.moveDown(speed);
+        else if (equalsIgnoreCase(manualName, "Links")) motionPlanner.moveLeft(speed);
+        else motionPlanner.moveRight(speed);
         Serial.println("+OK");
         return;
     }
@@ -160,7 +170,9 @@ void processLine(char *line) {
     // Stop und E-Stop haben keine Argumente.
     if (equalsIgnoreCase(command, "Stop") || equalsIgnoreCase(command, "E-Stop")) {
         if (!hasExactArguments(cursor, 0)) { printBadCommand(); return; }
-        Serial.print("TEST "); Serial.println(command); // TODO: stopMotion()/emergencyStop()
+        Serial.print("TEST "); Serial.println(command);
+        if (equalsIgnoreCase(command, "E-Stop")) motionPlanner.emergencyStop();
+        else motionPlanner.stopMotion();
         Serial.println("+OK");
         return;
     }
@@ -168,14 +180,16 @@ void processLine(char *line) {
     // Pos und Status sind Abfragen mit jeweils einer Antwortzeile.
     if (equalsIgnoreCase(command, "Pos")) {
         if (!hasExactArguments(cursor, 0)) { printBadCommand(); return; }
-        Serial.println("TEST Pos"); // TODO: tatsächliche Position ausgeben
-        Serial.println("+POS 0.0 0.0");
+        float azimuth, altitude;
+        motionPlanner.getPosition(azimuth, altitude);
+        Serial.println("TEST Pos");
+        Serial.print("+POS "); Serial.print(azimuth); Serial.print(' '); Serial.println(altitude);
         return;
     }
     if (equalsIgnoreCase(command, "Status")) {
         if (!hasExactArguments(cursor, 0)) { printBadCommand(); return; }
-        Serial.println("TEST Status"); // TODO: tatsächlichen Status ausgeben
-        Serial.println("+STATUS IDLE");
+        Serial.println("TEST Status");
+        Serial.println(motionPlanner.isBusy() ? "+STATUS BUSY" : "+STATUS IDLE");
         return;
     }
 
@@ -186,7 +200,8 @@ void processLine(char *line) {
         if (speedText == nullptr || nextToken(cursor) != nullptr || !parseNumber(speedText, speed)) {
             printBadCommand(); return;
         }
-        Serial.print("TEST Speed "); Serial.println(speed); // TODO: setSpeed(speed)
+        Serial.print("TEST Speed "); Serial.println(speed);
+        motionPlanner.setSpeed(speed);
         Serial.println("+OK");
         return;
     }
@@ -228,10 +243,16 @@ void receiveSerial() {
 
 void setup() {
     Serial.begin(115200);
+    motionPlanner.begin();
 }
 
 void loop() {
     receiveSerial(); // regelmäßig aufrufen; keine blockierende Eingabe verwenden
+    motionPlanner.update();
 }
+
+
+
+
 
 
