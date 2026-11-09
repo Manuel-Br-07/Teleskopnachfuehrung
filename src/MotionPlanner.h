@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 /**
  * Schnittstelle f?r die Bewegungsplanung des Teleskops.
  *
@@ -27,8 +29,15 @@ public:
     void setSpeed(float speed);
 
     bool isBusy() const;
-    bool isHomed() const;
+    bool isHomed()const;
+    bool isNulled()const;
     void getPosition(float &azimuth, float &altitude) const;
 
     void initializeDrivers(); // Initialisierung der Motoren und Sensoren.
+    void initializeSteppers(); // Initialisierung der Schrittmotoren und der Bewegungssteuerung.
+
+    uint16_t getCurrentPosPan() ;
+    uint16_t getCurrentPosTilt() ;
+
+    void homingLogic();
 };

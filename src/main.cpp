@@ -250,9 +250,3 @@ void loop() {
     receiveSerial(); // regelmäßig aufrufen; keine blockierende Eingabe verwenden
     motionPlanner.update();
 }
-
-
-
-
-
-
