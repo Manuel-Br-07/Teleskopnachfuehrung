@@ -46,7 +46,7 @@ constexpr float MAX_POSITION_PAN = 600.0;                                  // Ma
 constexpr float MAX_POSITION_TILT = 180.0;                                 // Maximaler Tilt-Winkel in Grad
 
 bool Homed = true;   // Flag, das angibt, ob das Teleskop bereits referenziert wurde (Homing durchgeführt).
-int HomingState = 0; // Zustand der Referenzfahrt: 0 = nicht aktiv,1 = aktiv, 11 = schnell nach Endstop 1PAN u. 2PAN, 12 = langsam nach Endstop 1PAN u. 2PAN, 13 = zurück, 21 = schnell nach Endstop TILT, 22 = langsam nach Endstop TILT 23 = zurück
+int HomingState = 0; // Zustand der Referenzfahrt: 0 = Homing abgeschlossen; 1 = Initialisierung; 2 = PAN-Endstop freifahren, warten; 3 = TILT-Endstop freifahren, warten; 10–14 = PAN-Referenzfahrt; 20–24 = TILT-Referenzfahrt
 bool Nulled = false; // Flag, das angibt, ob das Teleskop bereits auf Null gesetzt wurde (Referenzposition definiert).
 
 uint16_t currentPosPan = 0;  // Aktuelle Position in Grad
@@ -54,6 +54,8 @@ uint16_t currentPosTilt = 0; // Aktuelle Position in Grad
 
 uint16_t nullPosPan = 0;  // Nullposition in Grad
 uint16_t nullPosTilt = 0; // Nullposition in Grad
+
+uint16_t speed = 5; // Geschwindigkeit in Grad pro Sekunde
 
 // Initialisierung der Motoren, Sensoren und internen Zustände.
 void MotionPlanner::begin()
@@ -67,6 +69,7 @@ void MotionPlanner::update()
 {
     // TODO: Bewegungszustand fortschreiben und Motoren aktualisieren.
     homingLogic(); // Referenzfahrt-Logik aufrufen
+    // Serial.println("PAN: " + String(digitalRead(PAN_endstop1)) + " " + String(digitalRead(PAN_endstop2)) + " TILT: " + String(digitalRead(TILT_endstop)));
 }
 
 void MotionPlanner::gotoPosition(float azimuth, float altitude)
@@ -159,6 +162,7 @@ void MotionPlanner::setSpeed(float speed)
     // TODO: globale Geschwindigkeit setzen.
     tiltStepper->setSpeedInHz(speed * STEP_PER_DEGREE);
     panStepper->setSpeedInHz(speed * STEP_PER_DEGREE);
+    ::speed = speed;
 }
 
 bool MotionPlanner::isBusy() const
@@ -227,9 +231,6 @@ void MotionPlanner::initializeDrivers()
     TILT_driver.pwm_autoscale(true);
     TILT_driver.toff(4);
     TILT_driver.blank_time(24);
-
-    digitalWrite(PAN_EN, LOW);
-    digitalWrite(TILT_EN, LOW);
 }
 
 // Initialisiert FastAccelStepper für PAN und TILT.
@@ -268,79 +269,234 @@ uint16_t MotionPlanner::getCurrentPosTilt()
     return tiltStepper->getCurrentPosition() / STEP_PER_DEGREE;
 }
 
+
 void MotionPlanner::homingLogic()
 {
-    if (::HomingState != 0)
+    if (::HomingState == 0)
+        return;
+
+    switch (::HomingState)
     {
-        // Referenzfahrt-Logik implementieren
-        switch (::HomingState)
-        {
+        // ==========================================
+        // INITIALISIERUNG
+        // ==========================================
+
         case 1:
-            // Referenzfahrt aktiv, aber noch nicht gestartet
-            Serial.println(HomingState);
-            if (panStepper->isRunning() || tiltStepper->isRunning())
+
+            ::Homed = false;
+
+            digitalWrite(PAN_EN, LOW);
+            digitalWrite(TILT_EN, LOW);
+
+            panStepper->setSpeedInHz(5 * STEP_PER_DEGREE);
+            tiltStepper->setSpeedInHz(5 * STEP_PER_DEGREE);
+
+            // PAN-Endstop bereits gedrückt?
+            if (digitalRead(PAN_endstop2) == LOW)
             {
-                // Warten, bis beide Motoren gestoppt sind
+                panStepper->move(10 * STEP_PER_DEGREE);
+                ::HomingState = 2;
                 break;
             }
 
-            tiltStepper->setSpeedInHz(5 * STEP_PER_DEGREE);
-            panStepper->setSpeedInHz(5 * STEP_PER_DEGREE);
-
-
-            if (digitalRead(PAN_endstop1) == LOW || digitalRead(PAN_endstop2) == LOW)
+            // TILT-Endstop bereits gedrückt?
+            if (digitalRead(TILT_endstop) == LOW)
             {
-                ::HomingState = 13;                        // Von endstop 1PAN u. 2PAN wegfahren
-                panStepper->move((30) * STEP_PER_DEGREE); // 30 Grad zurückfahren
+                tiltStepper->move(-10 * STEP_PER_DEGREE);
+                ::HomingState = 3;
+                break;
             }
+
+            // PAN-Referenzfahrt starten
+            ::HomingState = 10;
+            panStepper->move(-(MAX_POSITION_PAN + 10) * STEP_PER_DEGREE);
+
+            break;
+
+
+        // ==========================================
+        // INITIAL: PAN-ENDSTOP FREIFAHREN
+        // ==========================================
+
+        case 2:
+
+            if (!panStepper->isRunning())
+            {
+                // Anschließend TILT-Endstop prüfen
+                if (digitalRead(TILT_endstop) == LOW)
+                {
+                    tiltStepper->move(-30 * STEP_PER_DEGREE);
+                    ::HomingState = 3;
+                }
+                else
+                {
+                    ::HomingState = 10;
+                    panStepper->move(-(MAX_POSITION_PAN + 10) * STEP_PER_DEGREE);
+                }
+            }
+
+            break;
+
+
+        // ==========================================
+        // INITIAL: TILT-ENDSTOP FREIFAHREN
+        // ==========================================
+
+        case 3:
+
+            if (!tiltStepper->isRunning())
+            {
+                ::HomingState = 10;
+                panStepper->move(-(MAX_POSITION_PAN + 10) * STEP_PER_DEGREE);
+            }
+
+            break;
+
+
+        // ==========================================
+        // PAN: SCHNELLE REFERENZFAHRT
+        // ==========================================
+
+        case 10:
+
+            if (digitalRead(PAN_endstop1) == LOW &&
+                digitalRead(PAN_endstop2) == LOW)
+            {
+                panStepper->forceStop();
+                ::HomingState = 11;
+            }
+
+            break;
+
+
+        // Warten, bis PAN tatsächlich steht
+        case 11:
+
+            if (!panStepper->isRunning())
+            {
+                panStepper->move(2 * STEP_PER_DEGREE);
+                ::HomingState = 12;
+            }
+
+            break;
+
+
+        // PAN: 2 Grad zurückfahren
+        case 12:
+
+            if (!panStepper->isRunning())
+            {
+                panStepper->setSpeedInHz(2 * STEP_PER_DEGREE);
+                panStepper->move(-10 * STEP_PER_DEGREE);
+                ::HomingState = 13;
+            }
+
+            break;
+
+
+        // PAN: Langsame Referenzfahrt
+        case 13:
+
+            if (digitalRead(PAN_endstop1) == LOW &&
+                digitalRead(PAN_endstop2) == LOW)
+            {
+                panStepper->forceStop();
+                ::HomingState = 14;
+            }
+
+            break;
+
+
+        // PAN: Stillstand abwarten und Nullpunkt setzen
+        case 14:
+
+            if (!panStepper->isRunning())
+            {
+                panStepper->setCurrentPosition(0);
+                panStepper->moveTo(0);
+
+                // TILT-Referenzfahrt starten
+                tiltStepper->setSpeedInHz(5 * STEP_PER_DEGREE);
+
+                tiltStepper->move(
+                    (MAX_POSITION_TILT + 10) * STEP_PER_DEGREE
+                );
+
+                ::HomingState = 20;
+            }
+
+            break;
+
+
+        // ==========================================
+        // TILT: SCHNELLE REFERENZFAHRT
+        // ==========================================
+
+        case 20:
 
             if (digitalRead(TILT_endstop) == LOW)
             {
-                ::HomingState = 23;                        // Von endstop TILT wegfahren
-                tiltStepper->move(-(30) * STEP_PER_DEGREE); // 30 Grad zurückfahren
-            }
-            ::HomingState = 11; // Referenzfahrt starten
-
-            break;
-        case 11:
-            // Schnell zu Endstop PAN fahren
-            Serial.println(HomingState);
-
-            break;
-        case 12:
-            // Langsam zu Endstop PAN fahren
-            Serial.println(HomingState);
-
-            break;
-        case 13:
-            // Von Endstop PAN wegfahren
-            Serial.println(HomingState);
-            if (digitalRead(PAN_endstop1) == HIGH && digitalRead(PAN_endstop2)   == HIGH)
-            {
-                ::HomingState = 1;                        // 2. Achse Prüfen
-                panStepper->move((2 * STEP_PER_DEGREE)); // 2 Grad weiterfahren
+                tiltStepper->forceStop();
+                ::HomingState = 21;
             }
 
             break;
+
+
+        // Warten, bis TILT tatsächlich steht
         case 21:
-            // Schnell zu Endstop TILT fahren
-            Serial.println(HomingState);
 
-            break;
-        case 22:
-            // Langsam zu Endstop TILT fahren
-            Serial.println(HomingState);
-
-            break;
-        case 23:
-            // Von Endstop TILT wegfahren
-            Serial.println(HomingState);
-            if (digitalRead(TILT_endstop)    == HIGH)
+            if (!tiltStepper->isRunning())
             {
-                ::HomingState = 1;                      // 2. Achse Prüfen
-                tiltStepper->move(-2 * STEP_PER_DEGREE); // 2 Grad weiterfahren
+                tiltStepper->move(-2 * STEP_PER_DEGREE);
+                ::HomingState = 22;
             }
+
             break;
-        }
+
+
+        // TILT: 2 Grad zurückfahren
+        case 22:
+
+            if (!tiltStepper->isRunning())
+            {
+                tiltStepper->setSpeedInHz(2 * STEP_PER_DEGREE);
+                tiltStepper->move(10 * STEP_PER_DEGREE);
+                ::HomingState = 23;
+            }
+
+            break;
+
+
+        // TILT: Langsame Referenzfahrt
+        case 23:
+
+            if (digitalRead(TILT_endstop) == LOW)
+            {
+                tiltStepper->forceStop();
+                ::HomingState = 24;
+            }
+
+            break;
+
+
+        // TILT: Stillstand abwarten und Nullpunkt setzen
+        case 24:
+
+            if (!tiltStepper->isRunning())
+            {
+                tiltStepper->setCurrentPosition(0);
+                tiltStepper->moveTo(0);
+
+                ::HomingState = 0;
+                ::Homed = true;
+                
+                panStepper->setSpeedInHz(::speed * STEP_PER_DEGREE);
+                tiltStepper->setSpeedInHz(::speed * STEP_PER_DEGREE);
+
+                Serial.println("Homing abgeschlossen!");
+            }
+
+            break;
     }
 }
