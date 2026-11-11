@@ -31,13 +31,15 @@ public:
     bool isBusy() const;
     bool isHomed()const;
     bool isNulled()const;
+    bool isFollowing() const;
     void getPosition(float &azimuth, float &altitude) const;
 
     void initializeDrivers(); // Initialisierung der Motoren und Sensoren.
     void initializeSteppers(); // Initialisierung der Schrittmotoren und der Bewegungssteuerung.
 
-    uint16_t getCurrentPosPan() ;
-    uint16_t getCurrentPosTilt() ;
+    float getCurrentPosPan() ;
+    float getCurrentPosTilt() ;
 
     void homingLogic();
+    void gotoLogic();
 };
